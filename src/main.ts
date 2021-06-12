@@ -1,13 +1,13 @@
 import Vue from "vue";
-import { BootstrapVue } from "bootstrap-vue";
-import VueYouTubeEmbed from "vue-youtube-embed";
-import App from "./App.vue";
+// import { BootstrapVue } from "bootstrap-vue";
 
 import "bootstrap/dist/css/bootstrap.css";
-import "bootstrap-vue/dist/bootstrap-vue.css";
+// import "bootstrap-vue/dist/bootstrap-vue.css";
+import "./style.scss";
 
-Vue.use(BootstrapVue);
-Vue.use(VueYouTubeEmbed);
+import App from "./App.vue";
+
+// Vue.use(BootstrapVue);
 
 Vue.config.productionTip = false;
 
