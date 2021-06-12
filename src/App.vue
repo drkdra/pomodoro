@@ -1,9 +1,12 @@
 <template>
   <div class="container">
-    <div class="row">
-      <div class="col-12 text-center counter my-3">{{ counterDisplay }}</div>
-    </div>
-    <div class="row">
+    <div class="row position-relative">
+      <div
+        class="col-12 text-center counter my-3"
+        :class="{ flashing: stopping }"
+      >
+        {{ counterDisplay }}
+      </div>
       <div class="col-12 text-center buttons my-3">
         <button
           v-if="!started"
@@ -22,22 +25,36 @@
           Pause
         </button>
         <button v-else type="button" class="btn btn-primary" @click="resume">
-          Resume
+          Continue
         </button>
         <button
-          v-if="started"
           type="button"
           class="btn btn-secondary"
-          @click="next"
+          :class="{ invisible: !stopping }"
+          @click="stop"
         >
-          Next
+          Stop
         </button>
         <button type="button" class="btn btn-danger" @click="reset">
           Reset
         </button>
       </div>
+      <div class="histories">
+        <div
+          v-for="(item, index) in items"
+          :key="index"
+          class="history-item"
+          :class="{
+            green: item.type === 'work',
+            yellow: item.type === 'break',
+            red: item.type === 'long_break',
+          }"
+        >
+          {{ getType(item.type) }}
+        </div>
+      </div>
     </div>
-    <div class="row options">
+    <div class="row options d-none">
       <div class="col-sm form-group">
         <label>Work duration</label>
         <select v-model="workDuration" class="form-control">
@@ -86,21 +103,12 @@
           </option>
         </select>
       </div>
-    </div>
-    <div class="row history">
-      <div
-        v-for="(item, index) in items"
-        :key="index"
-        class="col-6"
-        :class="{
-          green: item.type === 'work',
-          yellow: item.type === 'short_break',
-          red: item.type === 'long_break',
-        }"
-      >
-        {{ getType(item.type) }} ({{ item.duration }}s)
+      <div class="col-sm form-group">
+        <label>Speed</label>
+        <input v-model="speed" id="speed" class="form-control" />
       </div>
     </div>
+    <audio ref="alarm" src="ding.mp3" loop autoplay muted />
   </div>
 </template>
 
@@ -108,15 +116,17 @@
 import { Component, Vue } from "vue-property-decorator";
 import { padStart } from "lodash";
 
-export const ItemType = {
-  work: "work",
-  shortBreak: "short_break",
-  longBreak: "long_break",
-};
+// export const ItemType = {
+//   work: "work",
+//   break: "break",
+//   longBreak: "long_break",
+// };
+
+export type ItemType = "work" | "break" | "long_break";
 
 export interface IPomodoroItem {
   id: number;
-  type: "work" | "short_break" | "long_break";
+  type: ItemType;
   duration: number;
   remaining: number;
   created: number;
@@ -162,34 +172,54 @@ export default class App extends Vue {
     { value: 6, label: "6" },
   ];
 
-  // private workDuration = 1500;
-  // private breakDuration = 300;
-  // private longBreakDuration = 900;
-  // private longBreakDistance = 4;
-
-  private workDuration = 60;
-  private breakDuration = 30;
-  private longBreakDuration = 60;
+  private workDuration = 1500;
+  private breakDuration = 300;
+  private longBreakDuration = 900;
   private longBreakDistance = 4;
 
-  private items: IPomodoroItem[] = [];
+  // private workDuration = 60;
+  // private breakDuration = 30;
+  // private longBreakDuration = 60;
+  // private longBreakDistance = 4;
 
-  private speed = 10;
+  private speed = 1;
+
   private interval = 0;
 
   private started = false;
   private running = false;
+  private stopping = false;
+
+  private items: IPomodoroItem[] = [];
 
   public mounted(): void {
-    return;
+    const alarm = this.$refs.alarm as HTMLAudioElement;
+    alarm.volume = 0;
+
+    const queryParams = new URLSearchParams(location.search);
+    if (parseInt(queryParams.get("speed") || ""))
+      this.speed = parseInt(queryParams.get("speed") || "");
+    if (parseInt(queryParams.get("work") || ""))
+      this.workDuration = parseInt(queryParams.get("work") || "");
+    if (parseInt(queryParams.get("break") || ""))
+      this.breakDuration = parseInt(queryParams.get("break") || "");
+    if (parseInt(queryParams.get("long_break") || ""))
+      this.longBreakDuration = parseInt(queryParams.get("long_break") || "");
   }
 
   public reset(): void {
-    return;
+    this.started = false;
+    this.running = false;
+    this.stopping = false;
+    this.items = [];
+    this.stop();
+    if (this.interval) {
+      clearInterval(this.interval);
+      this.interval = 0;
+    }
   }
 
   public start(): void {
-    console.log("Start");
     this.started = true;
     this.next();
   }
@@ -204,7 +234,13 @@ export default class App extends Vue {
 
   public resume(): void {
     if (this.running) return;
+    if (this.stopping) return this.next();
     this.run();
+  }
+
+  public stop(): void {
+    const alarm = this.$refs.alarm as HTMLAudioElement;
+    alarm.volume = 0;
   }
 
   private next(): void {
@@ -214,37 +250,26 @@ export default class App extends Vue {
     }
     const lastItem = this.currentItem;
 
-    // Work if new or have completed break
+    let type: ItemType, duration;
+
     if (!lastItem || lastItem.type !== "work") {
-      const item: IPomodoroItem = {
-        id: this.items.length + 1,
-        type: "work",
-        duration: this.workDuration,
-        remaining: this.workDuration,
-        created: Date.now(),
-      };
-      this.items.push(item);
-      // Break
+      type = "work";
+      duration = this.workDuration;
     } else if (this.cycleCount < this.longBreakDistance) {
-      const item: IPomodoroItem = {
-        id: this.items.length + 1,
-        type: "short_break",
-        duration: this.breakDuration,
-        remaining: this.breakDuration,
-        created: Date.now(),
-      };
-      this.items.push(item);
-      // Long break
+      type = "break";
+      duration = this.breakDuration;
     } else {
-      const item: IPomodoroItem = {
-        id: this.items.length + 1,
-        type: "long_break",
-        duration: this.longBreakDuration,
-        remaining: this.longBreakDuration,
-        created: Date.now(),
-      };
-      this.items.push(item);
+      type = "long_break";
+      duration = this.longBreakDuration;
     }
+
+    this.items.push({
+      id: this.items.length + 1,
+      type,
+      duration,
+      remaining: duration,
+      created: Date.now(),
+    });
 
     this.run();
   }
@@ -253,6 +278,10 @@ export default class App extends Vue {
     const current = this.currentItem;
     if (!current) return;
     this.running = true;
+    this.stopping = false;
+    const alarm = this.$refs.alarm as HTMLAudioElement;
+    alarm.play();
+    alarm.volume = 0;
 
     current.startTime =
       Date.now() - ((current.duration - current.remaining) * 1000) / this.speed;
@@ -261,18 +290,31 @@ export default class App extends Vue {
       if (!current.startTime) return;
       const elapsed = ((Date.now() - current.startTime) / 1000) * this.speed;
       current.remaining = current.duration - elapsed;
-      console.log(elapsed, current.remaining);
+      // console.log(elapsed, current.remaining);
+      document.title = `🟢(${this.getType(current.type)}) - ${
+        this.counterDisplay
+      }`;
       if (current.remaining <= 0) {
         current.completed = true;
         current.endTime = Date.now();
-        console.log("End: ", (current.created - current.endTime) / 1000);
+        // console.log("End: ", (current.created - current.endTime) / 1000);
         clearInterval(this.interval);
         this.interval = 0;
         this.running = false;
-        this.next();
+        this.alarm();
       }
-      document.title = `🟢(${current.type}) - ${this.counterDisplay}`;
     }, 250);
+  }
+
+  private alarm(): void {
+    if (!this.currentItem) return;
+
+    const alertContent =
+      this.currentItem.type === "work" ? "Take a break" : "Continue work";
+    this.stopping = true;
+    document.title = `🔴 ${alertContent}`;
+    const alarm = this.$refs.alarm as HTMLAudioElement;
+    alarm.volume = 1;
   }
 
   private get currentItem(): IPomodoroItem | null {
@@ -284,7 +326,6 @@ export default class App extends Vue {
   private get cycleCount(): number {
     let count = 0;
     for (let i = this.items.length - 1; i >= 0; i--) {
-      // console.log()
       const item = this.items[i];
       if (item.type === "work") count++;
       if (item.type === "long_break") break;
@@ -295,6 +336,7 @@ export default class App extends Vue {
   public get counterDisplay(): string {
     if (!this.currentItem) return "00:00";
     const counter = this.currentItem.remaining;
+    if (counter < 0) return "00:00";
     const minutes = Math.floor(counter / 60);
     const seconds = Math.floor(counter - minutes * 60);
     const displayMinutes = padStart(String(minutes), 2, "0");
@@ -304,10 +346,10 @@ export default class App extends Vue {
   }
 
   private getType(type: string): string {
-    const map = {
-      work: "Work",
-      short_break: "Break",
-      long_break: "Long break",
+    const map: Record<string, string> = {
+      work: "W",
+      break: "B",
+      long_break: "L",
     };
 
     return map[type] || "";
@@ -325,16 +367,34 @@ export default class App extends Vue {
   margin-top: 60px;
 }
 
-.container .counter {
+.container {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.counter {
   font-size: 100px;
 }
 .buttons {
   .btn {
     margin: 0 10px;
+    width: 92px;
   }
 }
 
-.history {
+.histories {
+  position: absolute;
+  right: 0;
+  width: 160px;
+  min-height: 48px;
+
+  .history-item {
+    display: inline-block;
+    width: 12.5%;
+  }
+
   .green {
     color: #0af;
   }
@@ -343,6 +403,26 @@ export default class App extends Vue {
   }
   .red {
     color: red;
+  }
+}
+
+@media (max-width: 575px) {
+  .histories {
+    position: relative;
+    margin: 0 auto;
+  }
+}
+
+.flashing {
+  animation: flashing 500ms infinite ease-out;
+}
+
+@keyframes flashing {
+  from {
+    color: #000;
+  }
+  to {
+    color: #fff;
   }
 }
 </style>
